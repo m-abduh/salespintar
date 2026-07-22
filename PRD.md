@@ -461,6 +461,20 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 - Database connection retry logic
 - BullMQ job serialization + idempotency key untuk cegah duplicate execution saat restart
 - Container orchestration: `restart: unless-stopped` + healthcheck di Docker Compose
+- **Memory limit:** Container API wajib `--memory=512M` + `NODE_OPTIONS="--max-old-space-size=384"` cegah OOM
+- **Log rotation:** Winston daily rotate, max 100MB per file, compressed, retain 30 hari
+
+### 7.6 Operational Hardening
+
+| Item | Requirement |
+|------|-------------|
+| **Env Validation** | Semua env var wajib divalidasi saat startup, server gak boleh jalan kalau ada config kosong |
+| **Trust Proxy** | Nginx di belakang container, Express harus `app.set('trust proxy', 1)` biar rate limit & IP logging akurat |
+| **Error Handler** | Global error middleware Express — jangan bocorkan stack trace di production (return generic error) |
+| **Media Files** | WA media (gambar, docs) disimpan di `./uploads/`, di-serving oleh Nginx langsung (gak lewat Node) |
+| **Prisma Migration** | `prisma migrate deploy` di CI/CD. Rollback: restore DB dari backup + deploy versi sebelumnya |
+| **DB Connection** | Prisma connection pool = min 2, max 10 (cukup untuk MVP). Gunakan `connection_limit` di DATABASE_URL |
+| **CORS** | Whitelist ketat: hanya domain frontend yang dibolehkan. No wildcard. |
 
 ### 7.5 Frontend Resilience
 
