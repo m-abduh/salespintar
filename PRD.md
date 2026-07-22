@@ -1,6 +1,6 @@
 # PRD: SalesPintar (haloAI)
 
-> **Versi:** 2.0  
+> **Versi:** 2.1  
 > **Status:** Draft  
 > **Target MVP:** 6 minggu
 
@@ -23,7 +23,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | ID | Fitur | Detail |
 |----|-------|--------|
 | ACS-01 | Integrasi WhatsApp | Scan QR via Baileys WebSocket, auto reconnect, multi-device support |
-| ACS-02 | AI Auto Reply | LLM (OpenAI/Claude) balas pesan masuk real-time dengan konteks percakapan |
+| ACS-02 | AI Auto Reply | LLM (Groq) balas pesan masuk real-time dengan konteks percakapan |
 | ACS-03 | Context Window | Riwayat chat per lead disimpan, dikirim sebagai konteks ke LLM (last 20 messages) |
 | ACS-04 | Human Takeover | Sales ambil alih chat via dashboard, AI berhenti balas otomatis, flag conversation = HUMAN |
 | ACS-05 | Smart Tagging | Otomatis deteksi intent lead (minat, tanya harga, komplain, spam) via LLM |
@@ -88,7 +88,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | **Database** | PostgreSQL 16 + Prisma ORM | Type-safe query, migration otomatis |
 | **Cache/Queue** | Redis 7 + BullMQ | Job queue untuk broadcast & AI |
 | **WA Gateway** | Baileys (WebSocket) | Tanpa browser, hemat RAM (~50MB) |
-| **AI/LLM** | OpenAI GPT-4o / Claude 3.5 | Fallback: satu API down, pake lainnya |
+| **AI/LLM** | Groq (Llama 3 70B / Mixtral 8x7B) | Inferensi super cepat (< 1 detik), harga murah |
 | **Auth** | JWT (access + refresh) | httpOnly cookie, CSRF protection |
 | **Validation** | Zod | Type-safe runtime validation |
 | **Logging** | Winston + Morgan | Structured JSON logs, daily rotate |
@@ -111,7 +111,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
                                     ↕
                             [LLM Service]
                                     ↕
-                          [OpenAI / Claude API]
+                          [Groq API]
 ```
 
 ### 4.2 Auto CS Flow (Detail)
@@ -221,7 +221,7 @@ CREATE TABLE conversations (
   media_url TEXT,
   from_role VARCHAR(10) NOT NULL, -- LEAD | AI | HUMAN
   human_id UUID REFERENCES users(id), -- who replied (if from HUMAN)
-  ai_model VARCHAR(50), -- gpt-4o | claude-3.5
+  ai_model VARCHAR(50), -- llama-3-70b | mixtral-8x7b
   metadata JSONB, -- { "score": 85, "intent": "minat" }
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -420,12 +420,11 @@ JWT_REFRESH_SECRET=<random-64-chars>
 JWT_ACCESS_EXPIRES=15m
 JWT_REFRESH_EXPIRES=7d
 
-# AI / LLM
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
-CLAUDE_API_KEY=sk-ant-...
-CLAUDE_MODEL=claude-3-5-sonnet-20241022
-AI_PROVIDER=openai # fallback: claude
+# AI / LLM (Groq)
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.1-70b-versatile
+GROQ_MAX_TOKENS=1024
+GROQ_TEMPERATURE=0.7
 
 # WhatsApp
 WA_SESSION_FILE=./wa_session.json
@@ -463,8 +462,8 @@ BROADCAST_THROTTLE_MS=600
 
 | Skenario | Handling |
 |----------|----------|
-| OpenAI down | Auto fallback ke Claude |
-| Both down | Fallback ke template reply "Maaf sedang sibuk, akan dijawab sales kami" |
+| Groq down / rate limit | Auto fallback ke model lain (llama-3.1-8b → mixtral) |
+| All models down | Fallback ke template reply "Maaf sedang sibuk, akan dijawab sales kami" |
 | Rate limit API | Queue request, retry with backoff |
 | Toxic/spam input | Filter input + output, jangan forward spam ke LLM |
 | Empty response | Retry 1x, if still empty → template fallback |
