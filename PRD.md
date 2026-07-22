@@ -19,6 +19,17 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 
 ## 2. Fitur Utama
 
+### 2.0 Landing Page & Onboarding (Prioritas: P0)
+
+| ID | Fitur | Detail |
+|----|-------|--------|
+| LND-01 | Landing Page | Halaman publik pertama saat buka app. Berisi hero section, fitur unggulan, harga/CTA, footer. Desain profesional, responsive mobile |
+| LND-02 | Register | Form daftar: nama, email, password, konfirmasi password. Validasi real-time. Setelah daftar → auto login → redirect ke dashboard |
+| LND-03 | Login | Form login email + password. Link ke register. Opsi "Lupa password" (post-MVP). Setelah login → redirect ke dashboard |
+| LND-04 | Protected Routes | Landing page & auth pages (login/register) — public. Dashboard & semua fitur — wajib login. Redirect ke login kalau token expired |
+
+> **Flow User:** `Landing Page → Register → Dashboard (auto login)` atau `Landing Page → Login → Dashboard`
+
 ### 2.1 Auto CS (Prioritas: P0)
 
 | ID | Fitur | Detail |
@@ -75,6 +86,8 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | AUT-02 | Role-based Access | ADMIN (full access) vs SALES (chat only, no broadcast/config) |
 | AUT-03 | Session Management | Lihat & revoke session aktif |
 | AUT-04 | Rate Limit Auth | Max 5 attempts per email per 15 menit, akun lock 30 menit setelah 5 gagal |
+| AUT-05 | Register | Daftar akun baru: nama, email, password. Auto login setelah register. Hanya ADMIN bisa daftar (SALES diundang/dibuat oleh ADMIN) |
+| AUT-06 | Protected Routes | Landing & auth pages = public. Dashboard + semua fitur = protected (redirect ke login) |
 
 ---
 
@@ -343,6 +356,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
+| POST | `/api/v1/auth/register` | No | Daftar akun baru (hanya ADMIN role yang bisa daftar) |
 | POST | `/api/v1/auth/login` | No | Login, return access + refresh token |
 | POST | `/api/v1/auth/refresh` | No | Refresh access token |
 | POST | `/api/v1/auth/logout` | Yes | Revoke refresh token |
@@ -665,7 +679,7 @@ Push → GitHub Actions:
 
 | Minggu | Sprint | Deliverable |
 |--------|--------|-------------|
-| 1-2 | **Sprint 1** | Backend setup, auth, Prisma schema, user management, Express app + healthcheck |
+| 1-2 | **Sprint 1** | Backend setup, Prisma schema, auth (register/login/logout), Express app + healthcheck, Landing page + auth UI (frontend) |
 | 2-3 | **Sprint 2** | WhatsApp integration (Baileys), receive & store messages, typing indicator |
 | 3-4 | **Sprint 3** | AI integration (Groq LLM), auto reply flow, context management, anti-spam, fallback |
 | 4-5 | **Sprint 4** | Dashboard API + React frontend (layout, auth UI, KPI cards, grafik), WebSocket real-time |
