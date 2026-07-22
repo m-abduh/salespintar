@@ -82,20 +82,22 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 
 | Layer | Teknologi | Alasan |
 |-------|-----------|--------|
-| **Frontend** | React 18 + Vite 5 | Fast HMR, small bundle |
-| **Styling** | Tailwind CSS 3 | Utility-first, cepat develop |
+| **Frontend** | React + Vite | Fast HMR, small bundle |
+| **Styling** | Tailwind CSS | Utility-first, cepat develop |
 | **State** | TanStack Query + Zustand | Server state vs client state terpisah |
-| **Backend** | Node.js 20 + Express 4 | Ringan, ekosistem matang |
-| **Database** | PostgreSQL 16 + Prisma ORM | Type-safe query, migration otomatis |
-| **Cache/Queue** | Redis 7 + BullMQ | Job queue untuk broadcast & AI |
+| **Backend** | Node.js (LTS) + Express | Ringan, ekosistem matang |
+| **Database** | PostgreSQL + Prisma ORM | Type-safe query, migration otomatis |
+| **Cache/Queue** | Redis + BullMQ | Job queue untuk broadcast & AI |
 | **WA Gateway** | Baileys (WebSocket) | **Unofficial library.** Bisa kena ban. Untuk production serius → migrasi ke WhatsApp Business API (Cloud API / 360Dialog) |
-| **AI/LLM** | Groq (Llama 3.1 8B / Mixtral 8x7B) | Free tier, ringan & cepat |
+| **AI/LLM** | Groq (Llama 3 / Mixtral) | Free tier, ringan & cepat |
 | **Auth** | JWT (access + refresh) | httpOnly cookie, CSRF protection |
 | **Validation** | Zod | Type-safe runtime validation |
 | **Logging** | Winston + Morgan | Structured JSON logs, daily rotate |
 | **Deploy** | Docker + Docker Compose | Reproducible environment |
 | **Reverse Proxy** | Nginx | SSL termination, static serving, rate limit |
-| **Monitoring** | Sentry (error) | Error tracking production-grade |
+| **Monitoring** | Sentry | Error tracking production-grade |
+
+> **Catatan:** Versi tanpa angka di atas. Di `package.json` & `Dockerfile` tiap komponen wajib di-pin ke versi spesifik biar build reproducible. Update versi dilakukan knowingly, bukan otomatis.
 
 ### 3.1 ⚠️ Risk Acknowledgement: Baileys vs Official WA API
 
