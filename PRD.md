@@ -92,9 +92,12 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | **Cache/Queue** | Redis + BullMQ | Job queue untuk broadcast & AI |
 | **WA Gateway** | Baileys (WebSocket) | **Unofficial library.** Bisa kena ban. Untuk production serius → migrasi ke WhatsApp Business API (Cloud API / 360Dialog) |
 | **AI/LLM** | Groq (Llama 3 / Mixtral) | Free tier, ringan & cepat |
-| **Auth** | JWT (access + refresh) | httpOnly cookie, CSRF protection |
+| **Auth** | JWT (access + refresh) + bcrypt | httpOnly cookie, CSRF protection |
 | **Validation** | Zod | Type-safe runtime validation |
 | **Logging** | Winston + Morgan | Structured JSON logs, daily rotate |
+| **Routing** | React Router | Client-side routing, nested layouts, protected routes |
+| **Security** | helmet, cors, express-rate-limit, cookie-parser | Middleware standard Express |
+| **Dev Tools** | tsx (dev server), vite-bundle-analyzer | TypeScript execution, bundle optimization |
 | **Deploy** | Docker + Docker Compose | Reproducible environment |
 | **Reverse Proxy** | Nginx | SSL termination, static serving, rate limit |
 | **Monitoring** | Sentry | Error tracking production-grade |
