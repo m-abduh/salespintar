@@ -83,8 +83,10 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | Layer | Teknologi | Alasan |
 |-------|-----------|--------|
 | **Frontend** | React + Vite | Fast HMR, small bundle |
-| **Styling** | Tailwind CSS | Utility-first, cepat develop |
+| **Styling** | Tailwind CSS + clsx + tailwind-merge | Utility-first, conditional class |
 | **State** | TanStack Query + Zustand | Server state vs client state terpisah |
+| **Form** | React Hook Form + Zod | Validasi form real-time |
+| **UI** | sonner (toast), lucide-react (icons), @tanstack/react-table, recharts (grafik), react-textarea-autosize, date-fns | Komponen pendukung dashboard |
 | **Backend** | Node.js (LTS) + Express | Ringan, ekosistem matang |
 | **Database** | PostgreSQL + Prisma ORM | Type-safe query, migration otomatis |
 | **Cache/Queue** | Redis + BullMQ | Job queue untuk broadcast & AI |
