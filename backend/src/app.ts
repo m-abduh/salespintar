@@ -1,0 +1,75 @@
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
+import { env } from './config/env';
+import { correlationMiddleware } from './utils/correlation';
+import { errorHandler } from './middleware/errorHandler';
+import { prisma } from './config/prisma';
+import { logger } from './utils/logger';
+
+import authRoutes from './routes/auth.routes';
+import waRoutes from './routes/wa.routes';
+import conversationRoutes from './routes/conversation.routes';
+import messageRoutes from './routes/message.routes';
+import leadRoutes from './routes/lead.routes';
+import broadcastRoutes from './routes/broadcast.routes';
+import dashboardRoutes from './routes/dashboard.routes';
+
+const app = express();
+
+app.use(helmet());
+app.use(cors({
+  origin: env.CORS_ORIGIN.split(',').map(o => o.trim()),
+  credentials: true,
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
+app.use(correlationMiddleware);
+
+app.set('trust proxy', 1);
+
+const globalRateLimit = rateLimit({
+  windowMs: env.RATE_LIMIT_WINDOW_MS,
+  max: env.RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: 'Too many requests, please try again later' } },
+});
+app.use(globalRateLimit);
+
+app.get(`${env.API_PREFIX}/health`, async (_req, res) => {
+  const start = Date.now();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    const dbOk = true;
+    const dbLatency = Date.now() - start;
+
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      db: { connected: dbOk, latency: dbLatency },
+      environment: env.NODE_ENV,
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      db: { connected: false },
+      uptime: process.uptime(),
+    });
+  }
+});
+
+app.use(`${env.API_PREFIX}/auth`, authRoutes);
+app.use(`${env.API_PREFIX}/wa`, waRoutes);
+app.use(`${env.API_PREFIX}/conversations`, conversationRoutes);
+app.use(`${env.API_PREFIX}/conversations/:id/messages`, messageRoutes);
+app.use(`${env.API_PREFIX}/leads`, leadRoutes);
+app.use(`${env.API_PREFIX}/broadcasts`, broadcastRoutes);
+app.use(`${env.API_PREFIX}/dashboard`, dashboardRoutes);
+
+app.use(errorHandler);
+
+export default app;

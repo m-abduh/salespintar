@@ -1,0 +1,104 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: salespintar-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - API_PREFIX=/api/v1
+      - DATABASE_URL=postgresql://salespintar:salespintar@postgres:5432/salespintar
+      - REDIS_URL=redis://redis:6379
+      - REDIS_BULL_URL=redis://redis:6379/1
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - JWT_ACCESS_EXPIRES=15m
+      - JWT_REFRESH_EXPIRES=7d
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=llama-3.1-8b-instant
+      - GROQ_FALLBACK_MODEL=mixtral-8x7b-32768
+      - GROQ_MAX_TOKENS=1024
+      - GROQ_TEMPERATURE=0.7
+      - GROQ_DAILY_CAP_PER_LEAD=50
+      - WA_SESSIONS_DIR=/app/wa_sessions
+      - WA_MAX_CONNECTIONS=50
+      - CORS_ORIGIN=https://salespintar.com
+      - RATE_LIMIT_WINDOW_MS=60000
+      - RATE_LIMIT_MAX=100
+      - LOG_LEVEL=info
+      - LOG_DIR=/app/logs
+      - LOG_CORRELATION_ENABLED=true
+      - SENTRY_DSN=
+      - SENTRY_ENVIRONMENT=production
+      - BROADCAST_BATCH_SIZE=20
+      - BROADCAST_THROTTLE_MS=3000
+      - BROADCAST_MAX_RETRIES=3
+    volumes:
+      - wa_sessions:/app/wa_sessions
+      - uploads:/app/uploads
+      - logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 1g
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: salespintar-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: salespintar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: salespintar
+      POSTGRES_PASSWORD: salespintar
+      POSTGRES_DB: salespintar
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U salespintar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+
+  redis:
+    image: redis:7-alpine
+    container_name: salespintar-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --save 300 1
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+
+volumes:
+  postgres_data:
+  redis_data:
+  wa_sessions:
+  uploads:
+  logs:

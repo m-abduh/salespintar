@@ -1,0 +1,32 @@
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+COPY backend/package.json backend/tsconfig.json ./
+RUN npm ci
+
+COPY backend/prisma ./prisma
+RUN npx prisma generate
+
+COPY backend/src ./src
+RUN npm run build
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+RUN apk add --no-cache tini
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY backend/package.json ./
+COPY backend/prisma ./prisma
+
+RUN mkdir -p /app/wa_sessions /app/logs /app/uploads
+
+EXPOSE 3000
+
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--max-old-space-size=768"
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "dist/server.js"]
