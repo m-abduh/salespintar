@@ -3,8 +3,6 @@ import {
   makeWASocket,
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
   WASocket,
   AnyMessageContent,
   proto,
@@ -232,7 +230,8 @@ class BaileysManager {
     if (!instance) return 'DISCONNECTED';
     try {
       const ws = (instance.sock as any).ws;
-      return ws?.readyState === 1 ? 'CONNECTED' : 'DISCONNECTING';
+      const readyState = ws?.readyState ?? ws?.socket?.readyState;
+      return readyState === 1 ? 'CONNECTED' : 'DISCONNECTING';
     } catch {
       return 'DISCONNECTED';
     }

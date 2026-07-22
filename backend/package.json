@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.6.0",
-    "@whiskeysockets/baileys": "^6.17.16",
+    "@whiskeysockets/baileys": "^7.0.0-rc12",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.48.0",
     "cookie-parser": "^1.4.7",

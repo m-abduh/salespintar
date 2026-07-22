@@ -76,9 +76,9 @@ model WaCredential {
 model Lead {
   id             String    @id @default(uuid()) @db.Uuid
   businessId     String    @map("business_id") @db.Uuid
-  name           String?   @db.VarChar(200)
-  waNumber       String    @map("wa_number") @db.VarChar(15)
-  waId           String?   @map("wa_id") @db.VarChar(100)
+  name           String?   @db.VarChar(500)
+  waNumber       String    @map("wa_number") @db.VarChar(20)
+  waId           String?   @map("wa_id") @db.VarChar(200)
   avatarUrl      String?   @map("avatar_url")
   segment        String?   @db.VarChar(50)
   labels         String[]  @default([])
