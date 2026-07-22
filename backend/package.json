@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "fuser -k 3000/tcp 2>/dev/null; tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.6.0",
-    "@whiskeysockets/baileys": "^6.7.0",
+    "@whiskeysockets/baileys": "^6.17.16",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.48.0",
     "cookie-parser": "^1.4.7",

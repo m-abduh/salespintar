@@ -8,7 +8,7 @@ import { getIO } from '../websocket/handler';
 export async function handleIncomingMessage(businessId: string, msg: proto.IWebMessageInfo) {
   try {
     const key = msg.key;
-    const remoteJid = key.remoteJid;
+    const remoteJid = key?.remoteJid;
     const messageText = msg.message?.conversation
       || msg.message?.extendedTextMessage?.text
       || '';

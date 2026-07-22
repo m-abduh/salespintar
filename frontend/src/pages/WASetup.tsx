@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { apiGet, apiPost } from '../lib/api';
 import { Smartphone, RefreshCw, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 
 export default function WASetup() {
+  const [qrError, setQrError] = useState('');
+
   const { data: status, isLoading, refetch } = useQuery({
     queryKey: ['wa-status'],
     queryFn: () => apiGet<any>('/wa/status'),
@@ -11,6 +14,8 @@ export default function WASetup() {
 
   const { data: qrData, mutate: generateQR, isPending: qrLoading } = useMutation({
     mutationFn: () => apiGet<any>('/wa/qr'),
+    onError: (err: Error) => setQrError(err.message),
+    onSuccess: () => setQrError(''),
   });
 
   const { mutate: disconnect } = useMutation({
@@ -60,6 +65,12 @@ export default function WASetup() {
               <Smartphone className="w-5 h-5" />
               {qrLoading ? 'Memproses...' : 'Scan QR WhatsApp'}
             </button>
+
+            {qrError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                {qrError}
+              </div>
+            )}
 
             {qrData && (
               <div className="p-6 bg-gray-50 rounded-xl text-center">

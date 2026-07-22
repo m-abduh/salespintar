@@ -21,10 +21,10 @@ router.get('/qr', authenticate, authorize('ADMIN'), async (req: Request, res: Re
       });
     }
 
-    await baileysManager.connect(businessId);
+    const qrCode = await baileysManager.connect(businessId, true);
 
     const updated = await prisma.waCredential.findFirst({ where: { businessId } });
-    res.json({ qrCode: updated?.qrCode, status: updated?.status, expiresAt: updated?.qrExpiresAt });
+    res.json({ qrCode: qrCode || updated?.qrCode, status: updated?.status, expiresAt: updated?.qrExpiresAt });
   } catch (err) { next(err); }
 });
 

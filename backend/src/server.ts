@@ -32,8 +32,12 @@ async function bootstrap() {
   await setupWorkers();
 
   baileysManager.setMessageHandler(handleIncomingMessage);
-  await baileysManager.connectAllActive();
-  logger.info('Baileys connections restored for active businesses');
+
+  await prisma.waCredential.updateMany({
+    where: { status: 'CONNECTED' },
+    data: { status: 'DISCONNECTED' },
+  });
+  logger.info('Reset stale WA connections');
 
   const httpServer = http.createServer(app);
   setupWebSocket(httpServer);
@@ -44,27 +48,19 @@ async function bootstrap() {
     logger.info(`CORS origin: ${env.CORS_ORIGIN}`);
   });
 
-  const shutdown = async (signal: string) => {
-    logger.info(`Received ${signal}, shutting down gracefully...`);
-
-    httpServer.close(async () => {
-      await baileysManager.disconnectAll();
-      await closeQueues();
-      await prisma.$disconnect();
-      redisCache.disconnect();
-      redisBull.disconnect();
-      logger.info('Shutdown complete');
-      process.exit(0);
-    });
-
-    setTimeout(() => {
-      logger.error('Forced shutdown after timeout');
-      process.exit(1);
-    }, 30000);
+  const shutdown = (signal: string) => {
+    logger.info(`Received ${signal}, shutting down...`);
+    try { httpServer.close(); } catch {}
+    try { baileysManager.disconnectAll(); } catch {}
+    try { prisma.$disconnect(); } catch {}
+    try { redisCache.disconnect(); } catch {}
+    try { redisBull.disconnect(); } catch {}
+    process.exit(0);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGHUP', () => shutdown('SIGHUP'));
 
   process.on('unhandledRejection', (err: Error) => {
     logger.error('Unhandled rejection', { error: err.message, stack: err.stack });
