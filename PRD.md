@@ -1,8 +1,9 @@
 # PRD: SalesPintar (haloAI)
 
-> **Versi:** 2.1  
-> **Status:** Draft  
-> **Target MVP:** 6 minggu
+> **Versi:** 3.0  
+> **Status:** Final  
+> **Target MVP:** 8 minggu
+> **Catatan:** Estimasi awal 6 minggu terlalu agresif melihat kompleksitas integrasi WA + AI + broadcast. Ditambah 2 minggu untuk buffer testing & production hardening.
 
 ---
 
@@ -29,7 +30,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | ACS-05 | Smart Tagging | Otomatis deteksi intent lead (minat, tanya harga, komplain, spam) via LLM |
 | ACS-06 | Lead Scoring | Skor otomatis (0-100) berdasarkan frekuensi chat, intent, response rate |
 | ACS-07 | Typing Indicator | Kirim "typing..." biar terasa natural kayak CS manusia |
-| ACS-08 | Anti Spam | Rate limit balasan AI: max 1 pesan / 3 detik per lead, max 3 pesan berturut-turut tanpa balasan lead |
+| ACS-08 | Anti Spam | Rate limit balasan AI: max 1 pesan / 3 detik per lead, max 3 pesan berturut-turut tanpa balasan lead, max 50 AI replies/hari per lead |
 
 ### 2.2 Broadcast Scheduler (Prioritas: P0)
 
@@ -37,12 +38,12 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 |----|-------|--------|
 | BRS-01 | Buat Jadwal | Admin pilih tanggal & jam kirim, bisa sekali atau recurring (setiap hari/minggu) |
 | BRS-02 | Filter Target | Semua kontak, segmen tertentu, lead aktif (last chat < 7 hari), lead inactive (> 30 hari) |
-| BRS-03 | Template Pesan | Dukung variable: `{{nama}}`, `{{nomor}}`, `{{produk}}`. Preview sebelum kirim |
+| BRS-03 | Template Pesan | Dukung variable: `{{nama}}`, `{{nomor}}`, `{{produk}}`. Preview sebelum kirim. **Harus ada sanitasi input** untuk cegah template injection (escape special chars di variable values) |
 | BRS-04 | Personal Massal | Kirim pesan massal dengan variable personal per kontak |
 | BRS-05 | Tracking Real-time | Status: PENDING → SENDING → SENT → DELIVERED → READ. Update real-time via WebSocket |
 | BRS-06 | Throttle Kirim | Kirim bertahap (100 pesan/menit) biar gak kena ban WA |
 | BRS-07 | Batch Cancel | Batalin broadcast yang masih PENDING atau SENDING |
-| BRS-08 | Retry Gagal | Auto retry 3x untuk pesan gagal kirim,间隔 5 menit |
+| BRS-08 | Retry Gagal | Auto retry 3x untuk pesan gagal kirim, interval 5 menit |
 
 ### 2.3 Dashboard Overview (Prioritas: P0)
 
@@ -87,14 +88,38 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | **Backend** | Node.js 20 + Express 4 | Ringan, ekosistem matang |
 | **Database** | PostgreSQL 16 + Prisma ORM | Type-safe query, migration otomatis |
 | **Cache/Queue** | Redis 7 + BullMQ | Job queue untuk broadcast & AI |
-| **WA Gateway** | Baileys (WebSocket) | Tanpa browser, hemat RAM (~50MB) |
+| **WA Gateway** | Baileys (WebSocket) | **Unofficial library.** Bisa kena ban. Untuk production serius → migrasi ke WhatsApp Business API (Cloud API / 360Dialog) |
 | **AI/LLM** | Groq (Llama 3.1 8B / Mixtral 8x7B) | Free tier, ringan & cepat |
 | **Auth** | JWT (access + refresh) | httpOnly cookie, CSRF protection |
 | **Validation** | Zod | Type-safe runtime validation |
 | **Logging** | Winston + Morgan | Structured JSON logs, daily rotate |
 | **Deploy** | Docker + Docker Compose | Reproducible environment |
 | **Reverse Proxy** | Nginx | SSL termination, static serving, rate limit |
-| **Monitoring** | Sentry (error) + Grafana/Prometheus (opsional) | Error tracking |
+| **Monitoring** | Sentry (error) | Error tracking production-grade |
+
+### 3.1 ⚠️ Risk Acknowledgement: Baileys vs Official WA API
+
+**Baileys adalah reverse-engineered WhatsApp Web library — BUKAN official API.**
+
+| Faktor | Risiko | Mitigasi MVP |
+|--------|--------|-------------|
+| **Ban akun** | Tinggi — WA bisa flag number sebagai unofficial client | Gunakan nomor cadangan, jangan nomor utama bisnis |
+| **Breaking changes** | Sedang — tiap update WA Web bisa break library | Pin version, test sebelum upgrade |
+| **No SLA** | Tinggi — tidak ada jaminan uptime | Queue all outbound messages, auto-retry |
+| **Feature terbatas** | Rendah — broadcast, auto-reply sudah cukup | Jangan depend pada fitur lanjutan (catalog, payment) |
+
+> **Post-MVP:** Rencanakan migrasi ke **WhatsApp Business Cloud API** (Meta) atau **360Dialog** untuk production skala besar. Baileys untuk MVP & validasi awal saja.
+
+### 3.2 Cost Estimation (MVP / month)
+
+| Service | Estimasi | Catatan |
+|---------|----------|---------|
+| Groq API | **Gratis** | 30 req/min, 14400 req/hari — cukup untuk < 500 chat/hari |
+| VPS (2GB RAM, 2 CPU) | $10-15 | Digital Ocean / Linode / Vultr |
+| Sentry | **Gratis** | 5k events/month |
+| S3 Backup | < $1 | Hanya untuk backup DB harian |
+| Domain + SSL | $10/year | Let's Encrypt gratis |
+| **Total** | **~$15-20/bulan** | |
 
 ---
 
@@ -136,13 +161,16 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 ```
 1. Sales di dashboard → buka conversation
 2. Klik "Ambil Alih"
-3. API: PATCH /conversations/:id/takeover
-4. Server update: conversation.status = HUMAN
-5. AI auto-reply STOP untuk lead ini
-6. Sales bisa balas manual via dashboard
-7. Sales klik "Selesai" → status = DONE, AI aktif lagi
-8. Notifikasi real-time via WebSocket ke sales lain
+3. API: POST /conversations/:id/takeover
+4. Server cek: apakah sudah di-takeover sales lain? Jika ya → tolak dengan 409 Conflict
+5. Server update: lead.conversation_status = HUMAN, set human_id
+6. AI auto-reply STOP untuk lead ini
+7. Sales bisa balas manual via dashboard
+8. Sales klik "Selesai" → status = DONE, AI aktif lagi
+9. Notifikasi real-time via WebSocket ke sales lain
 ```
+
+> **Critical:** Harus ada optimistic locking untuk cegah dua sales takeover chat yang sama bersamaan. Gunakan `updated_at` comparison atau `SELECT ... FOR UPDATE`.
 
 ### 4.4 Broadcast Flow (Detail)
 
@@ -159,6 +187,12 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
    f. Update Broadcast progress
 5. Tracking update real-time via WebSocket ke dashboard
 ```
+
+> **⚠️ Broadcast Compliance:** WhatsApp melarang broadcast massal tanpa opt-in. Risiko: nomor bisa di-block atau di-flag sebagai spam. Pastikan:
+> 1. Broadcast hanya dikirim ke lead yang pernah chat inbound (pernah interaksi)
+> 2. Setiap broadcast wajib ada opsi "STOP" / berhenti berlangganan
+> 3. Jangan kirim broadcast ke nomor yang sudah minta berhenti (BLOCKED status)
+> 4. Untuk production serius: gunakan **WhatsApp Business API Template Messages** yang sudah pre-approved Meta
 
 ---
 
@@ -200,8 +234,10 @@ CREATE TABLE leads (
   labels TEXT[] DEFAULT '{}',
   score INTEGER NOT NULL DEFAULT 0, -- 0-100
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE | INACTIVE | CONVERTED | BLOCKED
+  conversation_status VARCHAR(10) NOT NULL DEFAULT 'AI', -- AI | HUMAN | DONE
   intent VARCHAR(50), -- minat | tanya_harga | komplain | spam | unknown
   last_message_at TIMESTAMPTZ,
+  daily_ai_count INTEGER NOT NULL DEFAULT 0, -- reset setiap tengah malam
   total_messages INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -228,6 +264,7 @@ CREATE TABLE conversations (
 
 CREATE INDEX idx_conversations_lead ON conversations(lead_id, created_at DESC);
 CREATE INDEX idx_conversations_created ON conversations(created_at);
+CREATE INDEX idx_conversations_role ON conversations(from_role);
 
 -- Broadcast campaigns
 CREATE TABLE broadcasts (
@@ -288,6 +325,12 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 ---
 
 ## 6. API Endpoints
+
+### 6.0 Health & System
+
+| Method | Endpoint | Auth | Deskripsi |
+|--------|----------|------|-----------|
+| GET | `/api/v1/health` | No | Health check: returns status DB, Redis, WA connection, uptime |
 
 ### 6.1 Auth
 
@@ -351,6 +394,13 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | `chat:status` | Server → Client | Status change (AI/HUMAN/DONE) |
 | `broadcast:progress` | Server → Client | Broadcast progress update |
 | `wa:connected` | Server → Client | WhatsApp connection status |
+| `ws:reconnect` | Server → Client | Client harus reconnect (server restart) |
+
+> **WebSocket Reconnection Strategy (Client-side):**
+> - Exponential backoff: 1s → 2s → 4s → 8s → max 30s
+> - Kirim `last_event_id` saat reconnect untuk missed event reconciliation
+> - Buffer events selama disconnected (max 50), replay setelah connected
+> - Heartbeat setiap 30 detik (ping/pong), timeout disconnect jika 3 pong berturut-turut missed
 
 ---
 
@@ -364,13 +414,14 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | **JWT** | Access token 15 menit, refresh token 7 hari (httpOnly, Secure, SameSite=Strict) |
 | **Headers** | Helmet middleware: CSP, X-Frame-Options, X-Content-Type-Options, etc |
 | **CORS** | Whitelist origin, tidak pake `*` |
-| **Rate Limit** | Global: 100 req/min per IP. Auth: 5 req/15min. Broadcast API: 10 req/min |
+| **Rate Limit** | Global: 100 req/min per IP. Auth: 5 req/15min. Broadcast API: 10 req/min. AI reply: max 50/hari per lead. WebSocket: max 100 messages/min per connection |
 | **Input Validation** | Semua input divalidasi dengan Zod sebelum diproses |
 | **SQL Injection** | Prisma ORM prevents SQL injection (parameterized queries) |
 | **XSS** | Output encoding, Content-Security-Policy header |
 | **CSRF** | SameSite cookie + CSRF token untuk form mutations |
 | **WA Token** | Credentials WA disimpan di environment variable, bukan DB |
-| **Logging** | Jangan log password, token, atau message content sensitif |
+| **Logging** | Jangan log password, token, atau message content sensitif. Setiap log wajib punya `correlationId` (UUID per request) untuk tracing |
+| **Secrets Rotation** | Rotate JWT secrets dan GROQ_API_KEY setiap 90 hari |
 
 ### 7.2 Performance
 
@@ -387,14 +438,34 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 - Backend stateless → horizontal scaling possible
 - Redis untuk session store & queue → shared state
 - PostgreSQL connection pool (max 20 per instance)
-- Prisma Accelerate untuk production (optional)
+- Dashboard queries (trends, stats) harus pake Redis cache dengan TTL 5 menit untuk hindari slow query
+- **Post-MVP:** PgBouncer untuk connection pooling, Prisma Accelerate, materialized views
 
 ### 7.4 Availability
 
 - Auto-reconnect WhatsApp (Baileys handles reconnection)
-- Graceful shutdown (SIGTERM handler)
+- Graceful shutdown (SIGTERM handler):
+  - Stop accepting new requests
+  - Tunggu BullMQ active jobs selesai (max 30 detik)
+  - Close Prisma connection pool
+  - Close Redis/BullMQ connections
+  - Force exit setelah timeout 30 detik
 - Health check endpoint: `GET /api/v1/health`
 - Database connection retry logic
+- BullMQ job serialization + idempotency key untuk cegah duplicate execution saat restart
+- Container orchestration: `restart: unless-stopped` + healthcheck di Docker Compose
+
+### 7.5 Frontend Resilience
+
+| Kategori | Requirement |
+|----------|-------------|
+| **Error Boundary** | Setiap route punya React Error Boundary sendiri, jangan crash satu halaman merusak app |
+| **Offline State** | Tampilkan banner "Koneksi terputus" + auto reconnect WebSocket saat online kembali |
+| **Loading State** | Setiap data fetching punya skeleton loading, jangan white screen |
+| **Empty State** | Tampilkan ilustrasi & call-to-action kalau data kosong (no conversations, no leads, etc) |
+| **API Retry** | TanStack Query: retry 3x dengan exponential backoff untuk query, no retry untuk mutation |
+| **Graceful Degradation** | Kalau WebSocket down, fallback ke polling REST setiap 15 detik |
+| **Optimistic Updates** | Untuk kirim pesan: tampilkan langsung di UI sebelum konfirmasi server |
 
 ---
 
@@ -426,6 +497,7 @@ GROQ_MODEL=llama-3.1-8b-instant  # gratis & ringan
 GROQ_FALLBACK_MODEL=mixtral-8x7b-32768
 GROQ_MAX_TOKENS=1024
 GROQ_TEMPERATURE=0.7
+GROQ_DAILY_CAP_PER_LEAD=50  # max AI replies per lead per hari
 
 # WhatsApp
 WA_SESSION_FILE=./wa_session.json
@@ -440,10 +512,20 @@ RATE_LIMIT_MAX=100
 # Logging
 LOG_LEVEL=info
 LOG_DIR=./logs
+LOG_CORRELATION_ENABLED=true  # inject correlationId di setiap log
+
+# Sentry (Error Tracking)
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=${NODE_ENV}
 
 # Broadcast
 BROADCAST_BATCH_SIZE=100
 BROADCAST_THROTTLE_MS=600
+BROADCAST_MAX_RETRIES=3
+
+# Backup (PostgreSQL) — via host cron job
+# Schedule: pg_dump harian jam 3 pagi, retensi 30 hari
+# S3 upload opsional: tambah script di cron untuk aws s3 cp
 ```
 
 ---
@@ -483,8 +565,23 @@ BROADCAST_THROTTLE_MS=600
 | Skenario | Handling |
 |----------|----------|
 | Connection lost | Prisma auto-reconnect, retry query |
-| Slow query | Query optimization, index monitoring |
+| Slow query | Query optimization, index monitoring, EXPLAIN ANALYZE |
 | Deadlock | Prisma retry logic, keep transactions short |
+| Connection pool exhaustion | PgBouncer transaction mode, alarm jika >80% pool terpakai |
+
+### 9.5 Disaster Recovery & Backup
+
+| Skenario | Handling |
+|----------|----------|
+| **Accidental delete / corruption** | Backup harian (pg_dump) retention 30 hari, restore dalam < 1 jam |
+| **Server crash** | Docker restart policy + healthcheck |
+| **WA session lost** | WA session file di-volume mount persistent |
+| **Redis data loss** | Redis AOF enabled + RDB snapshots tiap 5 menit. BullMQ jobs persist ke DB juga |
+
+> **Backup Strategy (MVP):**
+> - **Daily:** pg_dump → gzip → simpan 30 hari di host + upload ke S3 (script bash via cron)
+> - **On-event:** Backup WA session file setiap QR sukses scan
+> - **Post-MVP:** Point-in-time recovery (WAL), restore drill automation, offsite replication
 
 ---
 
@@ -504,31 +601,42 @@ BROADCAST_THROTTLE_MS=600
 ### 11.1 Container Structure
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (MVP)
 services:
   api:        # Node.js backend
-  web:        # Nginx serving React build
+  web:        # Nginx serving React build + reverse proxy ke API
   postgres:   # PostgreSQL 16
   redis:      # Redis 7
 ```
+
+> **Catatan MVP:** Container structure di atas cukup untuk go-live. PgBouncer, backup container, dan multi-replica bisa ditambahkan post-MVP saat traffic sudah naik.
+>
+> **Backup MVP:** Cukup cron job di host (pg_dump harian, simpan 30 hari, upload S3 via script bash).
+>
+> **HA/Zero-downtime:** Untuk MVP, maintenance window 5 menit di jam sepi (02:00) sudah acceptable. Zero-downtime deploy post-MVP.
 
 ### 11.2 CI/CD Pipeline
 
 ```
 Push → GitHub Actions:
-  1. Lint & Type Check
-  2. Unit Test
+  1. Lint & Type Check (ESLint + tsc)
+  2. Unit Test + Integration Test (Vitest)
   3. Build Docker image
-  4. Push ke registry
-  5. Deploy ke VPS/Cloud Run
+  4. Push ke registry (Docker Hub / GHCR)
+  5. Deploy ke VPS:
+     a. SSH pull image + docker compose up -d
+     b. Prisma migrate deploy
+     c. Healthcheck verify (3x sukses)
+     d. Rollback: deploy ulang image sebelumnya jika gagal
 ```
 
-### 11.3 Monitoring
+### 11.3 Monitoring & Observability
 
-- **Health check:** `GET /api/v1/health` (returns DB, Redis, WA connection status)
-- **Logs:** Winston JSON logs → daily rotation (30 days retention)
-- **Errors:** Sentry integration (backend + frontend)
-- **Metrics:** (Post-MVP) Prometheus + Grafana
+- **Health check:** `GET /api/v1/health` (returns status DB, Redis, WA connection)
+- **Logs:** Winston JSON logs → daily rotation (30 days retention). Setiap log punya `correlationId` untuk request tracing
+- **Errors:** Sentry integration (backend + frontend), capture unhandled rejection & uncaught exception
+- **Alerts:** Sentry alert jika error rate > 1% dalam 5 menit. Docker auto-restart jika container crash
+- **Post-MVP:** Uptime monitoring (Better Stack), Prometheus + Grafana untuk metrics performa
 
 ---
 
@@ -536,11 +644,13 @@ Push → GitHub Actions:
 
 | Minggu | Sprint | Deliverable |
 |--------|--------|-------------|
-| 1-2 | **Sprint 1** | Backend setup, auth, Prisma schema, user management, basic Express app |
-| 2-3 | **Sprint 2** | WhatsApp integration (Baileys), receive & store messages |
-| 3-4 | **Sprint 3** | AI integration (LLM), auto reply flow, context management |
-| 4-5 | **Sprint 4** | Dashboard API + frontend, human takeover, real-time chat UI |
-| 5-6 | **Sprint 5** | Broadcast scheduler, contact management, Polish & deploy |
+| 1-2 | **Sprint 1** | Backend setup, auth, Prisma schema, user management, Express app + healthcheck |
+| 2-3 | **Sprint 2** | WhatsApp integration (Baileys), receive & store messages, typing indicator |
+| 3-4 | **Sprint 3** | AI integration (Groq LLM), auto reply flow, context management, anti-spam, fallback |
+| 4-5 | **Sprint 4** | Dashboard API + React frontend (layout, auth UI, KPI cards, grafik), WebSocket real-time |
+| 5-6 | **Sprint 5** | Chat UI + human takeover flow, sales reply, conversation list |
+| 6-7 | **Sprint 6** | Broadcast scheduler + contact management (CRUD, import/export, filter target) |
+| 7-8 | **Sprint 7** | Production hardening: error boundary, loading/empty state, graceful shutdown, backup cron, Sentry, Docker compose final |
 
 ---
 
