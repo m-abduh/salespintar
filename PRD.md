@@ -88,7 +88,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | **Database** | PostgreSQL 16 + Prisma ORM | Type-safe query, migration otomatis |
 | **Cache/Queue** | Redis 7 + BullMQ | Job queue untuk broadcast & AI |
 | **WA Gateway** | Baileys (WebSocket) | Tanpa browser, hemat RAM (~50MB) |
-| **AI/LLM** | Groq (Llama 3.1 70B / Mixtral 8x7B) | Free tier, inferensi super cepat (< 1 detik) |
+| **AI/LLM** | Groq (Llama 3.1 8B / Mixtral 8x7B) | Free tier, ringan & cepat |
 | **Auth** | JWT (access + refresh) | httpOnly cookie, CSRF protection |
 | **Validation** | Zod | Type-safe runtime validation |
 | **Logging** | Winston + Morgan | Structured JSON logs, daily rotate |
@@ -221,7 +221,7 @@ CREATE TABLE conversations (
   media_url TEXT,
   from_role VARCHAR(10) NOT NULL, -- LEAD | AI | HUMAN
   human_id UUID REFERENCES users(id), -- who replied (if from HUMAN)
-  ai_model VARCHAR(50), -- llama-3-70b | mixtral-8x7b
+  ai_model VARCHAR(50), -- llama-3.1-8b | mixtral-8x7b
   metadata JSONB, -- { "score": 85, "intent": "minat" }
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -422,7 +422,7 @@ JWT_REFRESH_EXPIRES=7d
 
 # AI / LLM (Groq — free tier)
 GROQ_API_KEY=gsk_...  # daftar gratis di console.groq.com
-GROQ_MODEL=llama-3.1-70b-versatile  # gratis: llama-3.1-70b | mixtral-8x7b | gemma2-9b
+GROQ_MODEL=llama-3.1-8b-instant  # gratis & ringan
 GROQ_FALLBACK_MODEL=mixtral-8x7b-32768
 GROQ_MAX_TOKENS=1024
 GROQ_TEMPERATURE=0.7
@@ -463,7 +463,7 @@ BROADCAST_THROTTLE_MS=600
 
 | Skenario | Handling |
 |----------|----------|
-| Groq down / rate limit | Auto fallback ke model lain (llama-3.1-70b → mixtral-8x7b → gemma2-9b) |
+| Groq down / rate limit | Auto fallback ke model lain (llama-3.1-8b → mixtral-8x7b) |
 | All models down | Fallback ke template reply "Maaf sedang sibuk, akan dijawab sales kami" |
 | Rate limit API | Queue request, retry with backoff |
 | Toxic/spam input | Filter input + output, jangan forward spam ke LLM |
