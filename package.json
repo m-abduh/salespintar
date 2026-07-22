@@ -1,0 +1,19 @@
+{
+  "name": "salespintar",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "infra:up": "docker compose -f docker-compose.dev.yml up -d",
+    "infra:down": "docker compose -f docker-compose.dev.yml down",
+    "db:migrate": "cd backend && npx prisma migrate dev --name init",
+    "db:generate": "cd backend && npx prisma generate",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "npm run infra:up && sleep 2 && concurrently -n api,web -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "setup": "npm run infra:up && sleep 3 && npm run db:generate && npm run db:migrate",
+    "start": "npm run setup && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
