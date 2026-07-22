@@ -52,7 +52,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | BRS-03 | Template Pesan | Dukung variable: `{{nama}}`, `{{nomor}}`, `{{produk}}`. Preview sebelum kirim. **Harus ada sanitasi input** untuk cegah template injection (escape special chars di variable values) |
 | BRS-04 | Personal Massal | Kirim pesan massal dengan variable personal per kontak |
 | BRS-05 | Tracking Real-time | Status: PENDING → SENDING → SENT → DELIVERED → READ. Update real-time via WebSocket |
-| BRS-06 | Throttle Kirim | Kirim bertahap (100 pesan/menit) biar gak kena ban WA |
+| BRS-06 | Throttle Kirim | Kirim bertahap (20 pesan/menit via Baileys — karena unofficial, 100/menit terlalu agresif). Untuk skala besar pake WA Business API (1000+/menit) |
 | BRS-07 | Batch Cancel | Batalin broadcast yang masih PENDING atau SENDING |
 | BRS-08 | Retry Gagal | Auto retry 3x untuk pesan gagal kirim, interval 5 menit |
 
@@ -82,7 +82,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 
 | ID | Fitur | Detail |
 |----|-------|--------|
-| AUT-01 | Login/Logout | JWT access token (15 menit) + refresh token (7 hari, httpOnly cookie) |
+| AUT-01 | Login/Logout | JWT access token (15 menit) + refresh token (7 hari, httpOnly cookie). **Refresh token rotation:** setiap refresh, token lama di-revoke & ganti baru. Token lama yang dipakai ulang → semua session user di-revoke (indikasi token stolen) |
 | AUT-02 | Role-based Access | ADMIN (full access) vs SALES (chat only, no broadcast/config) |
 | AUT-03 | Session Management | Lihat & revoke session aktif |
 | AUT-04 | Rate Limit Auth | Max 5 attempts per email per 15 menit, akun lock 30 menit setelah 5 gagal |
@@ -102,7 +102,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 | **UI** | React Router (routing), Recharts (grafik), date-fns (tanggal) | Minimal, gak ada bloat |
 | **Backend** | Node.js (LTS) + Express | Ringan, ekosistem matang |
 | **Database** | PostgreSQL + Prisma ORM | Type-safe query, migration otomatis |
-| **Cache/Queue** | Redis + BullMQ | Job queue untuk broadcast & AI |
+| **Cache/Queue** | Redis 7 + BullMQ | Job queue. **Wajib Redis 7** untuk fitur priority queue & delayed jobs BullMQ. **Koneksi dedicated** untuk BullMQ (pisah dari cache) biar gak saling rebut |
 | **WA Gateway** | Baileys (WebSocket) | **Unofficial library.** Bisa kena ban. Untuk production serius → migrasi ke WhatsApp Business API (Cloud API / 360Dialog) |
 | **AI/LLM** | Groq (Llama 3 / Mixtral) | Free tier, ringan & cepat |
 | **Auth** | JWT (access + refresh) + bcrypt | httpOnly cookie, CSRF protection |
@@ -164,30 +164,36 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 ```
 1. LEAD → kirim WA ke nomor bisnis
 2. Baileys terima pesan via WebSocket
-3. Server simpan pesan ke DB (conversations)
-4. Cek: apakah conversation sedang HUMAN? Jika ya → skip AI, notifikasi sales
-5. Jika AI mode → query konteks (last 20 messages)
-6. Generate AI prompt → kirim ke LLM
-7. Simpan balasan AI ke DB
-8. Kirim typing indicator ke WA
-9. Kirim balasan via Baileys
-10. Update lead.last_message_at
-11. Jalankan smart tagging async (intent detection + scoring)
-12. Total round-trip target: < 3 detik
+3. Server cari/create conversation untuk lead ini:
+   a. Cek apakah ada conversation dengan status AI atau HUMAN
+   b. Jika tidak ada → CREATE conversation baru (status=AI)
+   c. Jika ada HUMAN → skip AI, notifikasi sales
+4. Simpan pesan ke DB (messages → INSERT)
+5. Jika AI mode:
+   a. Enqueue job ke ai-reply queue
+   b. Queue handle: query konteks (last 20 messages dari messages table)
+   c. Generate AI prompt → kirim ke Groq (via queue, handle rate limit)
+   d. Simpan balasan AI ke DB
+   e. Kirim typing indicator + balasan via wa-send queue
+6. Update lead.last_message_at
+7. Enqueue job ke ai-tagging async (intent detection + scoring)
+8. Total round-trip target: < 3 detik (P95)
 ```
 
 ### 4.3 Human Takeover Flow
 
 ```
-1. Sales di dashboard → buka conversation
+1. Sales di dashboard → buka conversation (thread)
 2. Klik "Ambil Alih"
 3. API: POST /conversations/:id/takeover
-4. Server cek: apakah sudah di-takeover sales lain? Jika ya → tolak dengan 409 Conflict
-5. Server update: lead.conversation_status = HUMAN, set human_id
-6. AI auto-reply STOP untuk lead ini
-7. Sales bisa balas manual via dashboard
-8. Sales klik "Selesai" → status = DONE, AI aktif lagi
-9. Notifikasi real-time via WebSocket ke sales lain
+4. Server cek: conversation.status === 'HUMAN' dan human_id !== null?
+   Jika sudah di-takeover sales lain → tolak dengan 409 Conflict
+5. Server update: conversation.status = HUMAN, conversation.human_id = sales_id
+6. AI auto-reply STOP untuk lead ini (ai-reply queue skip untuk conversation ini)
+7. Sales bisa balas manual via dashboard → POST /messages (from_role = HUMAN)
+8. Sales klik "Selesai" → PATCH conversation.status = DONE, set ended_at
+9. Conversation baru berikutnya akan auto-create dengan status AI lagi
+10. Notifikasi real-time via WebSocket ke sales lain
 ```
 
 > **Critical:** Harus ada optimistic locking untuk cegah dua sales takeover chat yang sama bersamaan. Gunakan `updated_at` comparison atau `SELECT ... FOR UPDATE`.
@@ -202,7 +208,7 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
    a. Query leads sesuai filter
    b. Batch 100 leads → generate pesan (replace variables)
    c. Insert BroadcastLog (status: PENDING)
-   d. Kirim via Baileys (throttle 100/menit)
+    d. Kirim via Baileys (throttle 20/menit — safety untuk unofficial library)
    e. Update BroadcastLog (SENT/DELIVERED/FAILED)
    f. Update Broadcast progress
 5. Tracking update real-time via WebSocket ke dashboard
@@ -214,6 +220,43 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 > 3. Jangan kirim broadcast ke nomor yang sudah minta berhenti (BLOCKED status)
 > 4. Untuk production serius: gunakan **WhatsApp Business API Template Messages** yang sudah pre-approved Meta
 
+### 4.5 Queue Architecture (BullMQ)
+
+```
+                  ┌──────────────────────┐
+                  │   Baileys (WA Event)  │
+                  └──────┬───────────────┘
+                         │ pesan masuk
+                         ▼
+               ┌─────────────────┐
+               │  AI Reply Queue  │ ← PRIORITY HIGH
+               │ (Groq API call)  │
+               └────────┬────────┘
+                        │ balasan AI
+                        ▼
+               ┌──────────────────┐
+               │  WA Send Queue    │ ← PRIORITY HIGH (AI reply)
+               │                   │ ← PRIORITY LOW  (broadcast)
+               └────────┬─────────┘
+                        │ kirim via Baileys
+                        ▼
+                  ┌──────────┐
+                  │  Baileys  │
+                  └──────────┘
+```
+
+| Queue | Fungsi | Priority | Concurrency | Notes |
+|-------|--------|----------|-------------|-------|
+| **ai-reply** | Panggil Groq API untuk auto-reply | HIGH | 5 | Queue handle rate limit Groq (30 req/min). Auto fallback jika gagal |
+| **ai-tagging** | Smart tagging + scoring (async) | LOW | 2 | Gak blocking reply, jalan di belakang |
+| **wa-send** | Kirim pesan ke WA via Baileys | HIGH: AI reply, LOW: broadcast | 3 | Pisah priority biar broadcast gak blocking auto-reply |
+| **broadcast** | Eksekusi broadcast | LOW | 1 | Hanya 1 job broadcast dalam satu waktu |
+
+> **Redis Connections:**
+> - `connection 1`: BullMQ queue (wajib dedicated, gak compete sama operasi lain)
+> - `connection 2`: Cache + session store (shared, acceptable)
+> - Environment: `REDIS_URL` untuk cache, `REDIS_BULL_URL` untuk BullMQ (bisa指向 Redis yang sama dengan `maxRetriesPerRequest: null`)
+
 ---
 
 ## 5. Database Schema (Detail)
@@ -221,10 +264,11 @@ Aplikasi AI-powered CS WhatsApp dengan fitur **Auto Reply real-time**, **Broadca
 ### 5.1 Entity Relationship
 
 ```
-users ──1:N── conversations (via human takeover)
-leads ──1:N── conversations
+users ──1:N── conversations (sales takeover)
+leads ──1:N── conversations (sessions)
 leads ──1:N── broadcast_logs
 broadcasts ──1:N── broadcast_logs
+conversations ──1:N── messages (chat history)
 ```
 
 ### 5.2 Schema
@@ -247,17 +291,16 @@ CREATE TABLE users (
 CREATE TABLE leads (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR(200),
-  wa_number VARCHAR(20) NOT NULL UNIQUE,
+  wa_number VARCHAR(15) NOT NULL UNIQUE, -- max 15 digit (Indonesia: 62xxx = 10-13 digit)
   wa_id VARCHAR(100), -- Baileys JID
   avatar_url TEXT,
   segment VARCHAR(50),
   labels TEXT[] DEFAULT '{}',
   score INTEGER NOT NULL DEFAULT 0, -- 0-100
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE | INACTIVE | CONVERTED | BLOCKED
-  conversation_status VARCHAR(10) NOT NULL DEFAULT 'AI', -- AI | HUMAN | DONE
   intent VARCHAR(50), -- minat | tanya_harga | komplain | spam | unknown
   last_message_at TIMESTAMPTZ,
-  daily_ai_count INTEGER NOT NULL DEFAULT 0, -- reset setiap tengah malam
+  daily_ai_count INTEGER NOT NULL DEFAULT 0, -- reset setiap tengah malam via cron
   total_messages INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -268,10 +311,25 @@ CREATE INDEX idx_leads_status ON leads(status);
 CREATE INDEX idx_leads_segment ON leads(segment);
 CREATE INDEX idx_leads_last_message ON leads(last_message_at);
 
--- Conversations (chat history)
+-- Conversations (sessions between lead and business)
+-- Satu lead bisa punya banyak sesi percakapan
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  status VARCHAR(10) NOT NULL DEFAULT 'AI', -- AI | HUMAN | DONE
+  human_id UUID REFERENCES users(id), -- sales yang sedang/telah mengambil alih
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_conversations_lead ON conversations(lead_id);
+CREATE INDEX idx_conversations_status ON conversations(status);
+
+-- Messages (individual chat messages within a conversation)
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   message TEXT NOT NULL,
   message_type VARCHAR(20) NOT NULL DEFAULT 'text', -- text | image | document | location
   media_url TEXT,
@@ -282,9 +340,9 @@ CREATE TABLE conversations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_conversations_lead ON conversations(lead_id, created_at DESC);
-CREATE INDEX idx_conversations_created ON conversations(created_at);
-CREATE INDEX idx_conversations_role ON conversations(from_role);
+CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at DESC);
+CREATE INDEX idx_messages_created ON messages(created_at);
+CREATE INDEX idx_messages_role ON messages(from_role);
 
 -- Broadcast campaigns
 CREATE TABLE broadcasts (
@@ -320,7 +378,8 @@ CREATE TABLE broadcast_logs (
   sent_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
   read_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(broadcast_id, lead_id) -- cegah duplicate send
 );
 
 CREATE INDEX idx_broadcast_logs_broadcast ON broadcast_logs(broadcast_id);
@@ -331,7 +390,7 @@ CREATE INDEX idx_broadcast_logs_status ON broadcast_logs(status);
 CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  refresh_token VARCHAR(500) NOT NULL,
+  refresh_token VARCHAR(500) NOT NULL UNIQUE, -- refresh_token wajib unique
   user_agent TEXT,
   ip_address VARCHAR(45),
   expires_at TIMESTAMPTZ NOT NULL,
@@ -350,7 +409,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
-| GET | `/api/v1/health` | No | Health check: returns status DB, Redis, WA connection, uptime |
+| GET | `/api/v1/health` | No | Health check: returns status DB, Redis, WA connection, **Groq API (ping dengan request minimal)**, uptime |
 
 ### 6.1 Auth
 
@@ -363,19 +422,25 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | GET | `/api/v1/auth/sessions` | Yes | List active sessions |
 | DELETE | `/api/v1/auth/sessions/:id` | Yes | Revoke specific session |
 
-### 6.2 Conversations
+### 6.2 Conversations (Sessions)
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
-| GET | `/api/v1/conversations` | Yes | List conversations (paginated, filterable) |
-| GET | `/api/v1/conversations/:id` | Yes | Detail conversation + messages |
-| GET | `/api/v1/conversations/:id/messages` | Yes | Messages for a conversation (paginated) |
-| POST | `/api/v1/conversations/:id/takeover` | Yes | Human takeover |
-| POST | `/api/v1/conversations/:id/release` | Yes | Release back to AI |
-| POST | `/api/v1/conversations/:id/messages` | Yes | Sales kirim manual reply |
+| GET | `/api/v1/conversations` | Yes | List conversations (threads), paginated, filter by status/lead |
+| GET | `/api/v1/conversations/:id` | Yes | Detail conversation + lead info + last message |
 | PATCH | `/api/v1/conversations/:id` | Yes | Update status/notes |
+| POST | `/api/v1/conversations/:id/takeover` | Yes | Human takeover (set status=HUMAN, assign sales) |
+| POST | `/api/v1/conversations/:id/release` | Yes | Release back to AI (set status=AI, unassign sales) |
+| POST | `/api/v1/conversations/:id/complete` | Yes | Tandai selesai (status=DONE, set ended_at) |
 
-### 6.3 Contacts (Leads)
+### 6.3 Messages
+
+| Method | Endpoint | Auth | Deskripsi |
+|--------|----------|------|-----------|
+| GET | `/api/v1/conversations/:id/messages` | Yes | List messages dalam conversation (paginated, infinite scroll) |
+| POST | `/api/v1/conversations/:id/messages` | Yes | Sales kirim manual reply (from_role=HUMAN) |
+
+### 6.4 Contacts (Leads)
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
@@ -387,7 +452,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | POST | `/api/v1/leads/import` | Yes | Import CSV |
 | GET | `/api/v1/leads/export` | Yes | Export CSV |
 
-### 6.4 Broadcasts
+### 6.5 Broadcasts
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
@@ -398,7 +463,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | DELETE | `/api/v1/broadcasts/:id` | Yes | Cancel broadcast |
 | GET | `/api/v1/broadcasts/:id/logs` | Yes | Delivery logs |
 
-### 6.5 Dashboard
+### 6.6 Dashboard
 
 | Method | Endpoint | Auth | Deskripsi |
 |--------|----------|------|-----------|
@@ -407,7 +472,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | GET | `/api/v1/dashboard/recent` | Yes | Recent conversations |
 | GET | `/api/v1/dashboard/performance` | Yes | AI performance metrics |
 
-### 6.6 WebSocket
+### 6.7 WebSocket
 
 | Event | Direction | Deskripsi |
 |-------|-----------|-----------|
@@ -416,6 +481,12 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | `broadcast:progress` | Server → Client | Broadcast progress update |
 | `wa:connected` | Server → Client | WhatsApp connection status |
 | `ws:reconnect` | Server → Client | Client harus reconnect (server restart) |
+
+> **🔐 WebSocket Auth:**
+> - Koneksi WebSocket **wajib** menyertakan JWT access token di query param: `ws://host?token=<access_token>`
+> - Server validasi token di middleware `connection` event. Tolak jika invalid/expired (close with 4001)
+> - Token direfresh via REST (`/api/v1/auth/refresh`), client reconnect dengan token baru
+> - Rate limit: max 100 messages/min per connection
 
 > **WebSocket Reconnection Strategy (Client-side):**
 > - Exponential backoff: 1s → 2s → 4s → 8s → max 30s
@@ -432,7 +503,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 | Kategori | Requirement |
 |----------|-------------|
 | **Password** | bcrypt dengan cost factor 12, min 8 karakter |
-| **JWT** | Access token 15 menit, refresh token 7 hari (httpOnly, Secure, SameSite=Strict) |
+| **JWT** | Access token 15 menit, refresh token 7 hari (httpOnly, Secure, SameSite=Strict). **Refresh rotation:** revoke old + issue new tiap refresh. Jika token lama dipakai ulang → revoke semua session user (indikasi stolen) |
 | **Headers** | Helmet middleware: CSP, X-Frame-Options, X-Content-Type-Options, etc |
 | **CORS** | Whitelist origin, tidak pake `*` |
 | **Rate Limit** | Global: 100 req/min per IP. Auth: 5 req/15min. Broadcast API: 10 req/min. AI reply: max 50/hari per lead. WebSocket: max 100 messages/min per connection |
@@ -450,7 +521,7 @@ CREATE INDEX idx_sessions_token ON sessions(refresh_token);
 |--------|--------|
 | AI Response time | < 3 detik (P95) |
 | API Response time | < 200ms (P95) |
-| Broadcast speed | 100 messages/minute |
+| Broadcast speed | 20 messages/minute (Baileys MVP). 1000+/menit via WA Business API (post-MVP) |
 | Concurrent chats | 500+ per instance |
 | Uptime | 99.5% |
 
@@ -518,7 +589,8 @@ API_PREFIX=/api/v1
 DATABASE_URL=postgresql://user:pass@localhost:5432/salespintar
 
 # Redis
-REDIS_URL=redis://localhost:6379
+REDIS_URL=redis://localhost:6379       # cache + session store
+REDIS_BULL_URL=redis://localhost:6379/1  # BullMQ queue (database 1, dedicated)
 
 # JWT
 JWT_ACCESS_SECRET=<random-64-chars>
@@ -554,8 +626,8 @@ SENTRY_DSN=
 SENTRY_ENVIRONMENT=${NODE_ENV}
 
 # Broadcast
-BROADCAST_BATCH_SIZE=100
-BROADCAST_THROTTLE_MS=600
+BROADCAST_BATCH_SIZE=20   # batch kecil untuk Baileys (safety)
+BROADCAST_THROTTLE_MS=3000  # 20 msg/menit = 1 msg per 3 detik
 BROADCAST_MAX_RETRIES=3
 
 # Backup (PostgreSQL) — via host cron job
@@ -667,7 +739,7 @@ Push → GitHub Actions:
 
 ### 11.3 Monitoring & Observability
 
-- **Health check:** `GET /api/v1/health` (returns status DB, Redis, WA connection)
+- **Health check:** `GET /api/v1/health` (returns status DB, Redis, WA connection, Groq API)
 - **Logs:** Winston JSON logs → daily rotation (30 days retention). Setiap log punya `correlationId` untuk request tracing
 - **Errors:** Sentry integration (backend + frontend), capture unhandled rejection & uncaught exception
 - **Alerts:** Sentry alert jika error rate > 1% dalam 5 menit. Docker auto-restart jika container crash
