@@ -19,6 +19,7 @@ interface BaileysInstance {
   sock: WASocket;
   businessId: string;
   waCredentialId: string;
+  generation: number;
 }
 
 class BaileysManager {
@@ -26,6 +27,7 @@ class BaileysManager {
   private messageHandler: ((businessId: string, msg: proto.IWebMessageInfo) => Promise<void>) | null = null;
   private qrResolvers: Map<string, { resolve: (qr: string) => void; reject: (err: Error) => void }> = new Map();
   private reconnectCount: Map<string, number> = new Map();
+  private generation: Map<string, number> = new Map();
   private maxReconnects = 5;
 
   setMessageHandler(handler: (businessId: string, msg: proto.IWebMessageInfo) => Promise<void>) {
@@ -40,20 +42,40 @@ class BaileysManager {
     return dir;
   }
 
+  private clearSessionData(businessId: string) {
+    const sessionDir = this.getSessionDir(businessId);
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch {}
+  }
+
+  private nextGeneration(businessId: string): number {
+    const gen = (this.generation.get(businessId) || 0) + 1;
+    this.generation.set(businessId, gen);
+    return gen;
+  }
+
+  private isCurrentGeneration(businessId: string, generation: number): boolean {
+    return this.generation.get(businessId) === generation;
+  }
+
   async connect(businessId: string, waitForQR: boolean = false): Promise<string | void> {
     if (this.instances.has(businessId)) {
       const existing = this.instances.get(businessId)!;
       const waId = existing.sock.user?.id;
       if (waitForQR) {
-        if (waId) {
-          const cred = await prisma.waCredential.findFirst({ where: { businessId } });
-          if (cred?.qrCode) return cred.qrCode;
-        }
-        await this.disconnect(businessId);
+        this.reconnectCount.delete(businessId);
+        this.generation.delete(businessId);
+        await this.endConnection(businessId);
+        this.clearSessionData(businessId);
       } else {
         if (waId) return;
-        await this.disconnect(businessId);
+        await this.endConnection(businessId);
       }
+    }
+
+    if (waitForQR) {
+      this.clearSessionData(businessId);
     }
 
     if (this.instances.size >= env.WA_MAX_CONNECTIONS) {
@@ -69,7 +91,7 @@ class BaileysManager {
     }
 
     const sessionDir = this.getSessionDir(businessId);
-    if (cred.sessionData) {
+    if (!waitForQR && cred.sessionData) {
       const credsPath = path.join(sessionDir, 'creds.json');
       const sessionData = cred.sessionData as any;
       if (sessionData.creds) {
@@ -82,13 +104,12 @@ class BaileysManager {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      syncFullHistory: false,
-      emitOwnEvents: false,
       browser: ['SalesPintar', 'Chrome', '120.0'],
       logger: pino({ level: 'warn' }),
     });
 
-    const instance: BaileysInstance = { sock, businessId, waCredentialId: cred.id };
+    const generation = this.nextGeneration(businessId);
+    const instance: BaileysInstance = { sock, businessId, waCredentialId: cred.id, generation };
     this.instances.set(businessId, instance);
 
     sock.ev.on('creds.update', async () => {
@@ -118,6 +139,9 @@ class BaileysManager {
             qrCode: qrBase64,
             qrExpiresAt: new Date(Date.now() + 60000),
             status: 'DISCONNECTED',
+            waNumber: 'pending',
+            waId: null,
+            lastConnectedAt: null,
           },
         });
         const entry = this.qrResolvers.get(businessId);
@@ -129,6 +153,7 @@ class BaileysManager {
       }
 
       if (connection === 'open') {
+        if (!this.isCurrentGeneration(businessId, generation)) return;
         const waId = sock.user?.id;
         if (!waId) return;
         const waNumber = waId?.split(':')[0]?.replace('@s.whatsapp.net', '') || '';
@@ -147,48 +172,64 @@ class BaileysManager {
       }
 
       if (connection === 'close') {
+        if (!this.isCurrentGeneration(businessId, generation)) return;
         const err = lastDisconnect?.error as Boom;
         const statusCode = err?.output?.statusCode;
         const reason = err?.message || 'unknown';
         logger.warn(`WhatsApp closed for business ${businessId}: ${reason} (statusCode: ${statusCode})`);
-        const shouldReconnect =
-          statusCode === DisconnectReason.connectionLost ||
-          statusCode === DisconnectReason.connectionClosed ||
-          statusCode === DisconnectReason.restartRequired ||
-          statusCode === DisconnectReason.timedOut;
 
-        await prisma.waCredential.update({
-          where: { id: cred.id },
-          data: { status: 'DISCONNECTED' },
-        });
+        const isLoggedOut =
+          statusCode === DisconnectReason.loggedOut ||
+          statusCode === 401 ||
+          reason.toLowerCase().includes('logged out');
 
         this.instances.delete(businessId);
-        logger.info(`WhatsApp disconnected for business ${businessId}`);
+        this.reconnectCount.delete(businessId);
+
+        if (isLoggedOut) {
+          this.clearSessionData(businessId);
+          await prisma.waCredential.deleteMany({ where: { businessId } });
+          logger.warn(`WhatsApp logged out, credential deleted for business ${businessId}`);
+        } else {
+          await prisma.waCredential.update({
+            where: { id: cred.id },
+            data: { status: 'DISCONNECTED' },
+          });
+
+          const shouldReconnect = !statusCode ||
+            statusCode === DisconnectReason.connectionLost ||
+            statusCode === DisconnectReason.connectionClosed ||
+            statusCode === DisconnectReason.restartRequired ||
+            statusCode === DisconnectReason.timedOut ||
+            statusCode === 500 ||
+            reason.includes('xml-not-well-formed');
+
+          if (shouldReconnect) {
+            const attempts = this.reconnectCount.get(businessId) || 0;
+            if (attempts < this.maxReconnects) {
+              this.reconnectCount.set(businessId, attempts + 1);
+              const delay = Math.min(5000 * Math.pow(2, attempts), 60000);
+              logger.info(`Reconnecting WhatsApp for business ${businessId} (attempt ${attempts + 1}/${this.maxReconnects})...`);
+              setTimeout(() => this.connect(businessId), delay);
+            }
+          }
+        }
 
         const entry = this.qrResolvers.get(businessId);
         if (entry) {
           entry.reject(new Error(`QR gagal: ${reason} (statusCode: ${statusCode})`));
           this.qrResolvers.delete(businessId);
         }
-
-        if (shouldReconnect) {
-          const attempts = this.reconnectCount.get(businessId) || 0;
-          if (attempts < this.maxReconnects) {
-            this.reconnectCount.set(businessId, attempts + 1);
-            const delay = Math.min(5000 * Math.pow(2, attempts), 60000);
-            logger.info(`Reconnecting WhatsApp for business ${businessId} (attempt ${attempts + 1}/${this.maxReconnects})...`);
-            setTimeout(() => this.connect(businessId), delay);
-          } else {
-            logger.warn(`Max reconnection attempts reached for business ${businessId}`);
-            this.reconnectCount.delete(businessId);
-          }
-        }
       }
     });
 
     sock.ev.on('messages.upsert', async (msg) => {
+      if (!this.isCurrentGeneration(businessId, generation)) return;
       for (const message of msg.messages) {
-        if (!message.key.fromMe && this.messageHandler) {
+        if (message.key.fromMe) continue;
+        const jid = message.key.remoteJid || '';
+        if (jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue;
+        if (this.messageHandler) {
           await this.messageHandler(businessId, message);
         }
       }
@@ -212,23 +253,36 @@ class BaileysManager {
     });
   }
 
-  async disconnect(businessId: string): Promise<void> {
+  private async endConnection(businessId: string): Promise<void> {
     const instance = this.instances.get(businessId);
     if (instance) {
       instance.sock.end(new Error('Disconnected by user'));
       this.instances.delete(businessId);
     }
+  }
 
+  async disconnect(businessId: string): Promise<void> {
+    await this.endConnection(businessId);
     await prisma.waCredential.updateMany({
       where: { businessId },
-      data: { status: 'DISCONNECTED', qrCode: null, qrExpiresAt: null },
+      data: { status: 'DISCONNECTED' },
     });
+    this.reconnectCount.delete(businessId);
+  }
+
+  async logout(businessId: string): Promise<void> {
+    await this.endConnection(businessId);
+    this.clearSessionData(businessId);
+    await prisma.waCredential.deleteMany({ where: { businessId } });
+    this.reconnectCount.delete(businessId);
+    this.generation.delete(businessId);
   }
 
   getStatus(businessId: string): string {
     const instance = this.instances.get(businessId);
     if (!instance) return 'DISCONNECTED';
     try {
+      if (!instance.sock.user?.id) return 'DISCONNECTED';
       const ws = (instance.sock as any).ws;
       const readyState = ws?.readyState ?? ws?.socket?.readyState;
       return readyState === 1 ? 'CONNECTED' : 'DISCONNECTING';

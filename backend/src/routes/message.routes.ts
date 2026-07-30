@@ -6,6 +6,7 @@ import { prisma } from '../config/prisma';
 import { NotFoundError } from '../utils/errors';
 import { baileysManager } from '../services/baileys.service';
 import { getIO } from '../websocket/handler';
+import { logger } from '../utils/logger';
 
 const router = Router({ mergeParams: true });
 
@@ -75,12 +76,18 @@ router.post('/', authenticate, validate(sendMessageSchema), async (req: Request,
       },
     });
 
-    if (conversation.lead?.waId) {
-      const waId = conversation.lead.waId.includes('@s.whatsapp.net')
-        ? conversation.lead.waId
-        : `${conversation.lead.waId}@s.whatsapp.net`;
-
-      await baileysManager.sendMessage(businessId, waId, { text: req.body.message });
+    if (conversation.lead?.waId && baileysManager.isConnected(businessId)) {
+      let jid = conversation.lead.waId;
+      if (!jid.includes('@')) {
+        jid = `${jid}@s.whatsapp.net`;
+      }
+      try {
+        await baileysManager.sendMessage(businessId, jid, { text: req.body.message });
+      } catch (err: any) {
+        logger.error(`Failed to send WA message to ${jid}: ${err.message}`);
+      }
+    } else {
+      logger.warn(`WhatsApp not connected or lead missing waId for business ${businessId}`);
     }
 
     const io = getIO();

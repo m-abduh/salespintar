@@ -85,6 +85,13 @@ export function apiPost<T = any>(endpoint: string, data?: any) {
   });
 }
 
+export function apiPut<T = any>(endpoint: string, data?: any) {
+  return apiRequest<T>(endpoint, {
+    method: 'PUT',
+    body: data ? JSON.stringify(data) : undefined,
+  });
+}
+
 export function apiPatch<T = any>(endpoint: string, data?: any) {
   return apiRequest<T>(endpoint, {
     method: 'PATCH',

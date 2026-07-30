@@ -7,6 +7,7 @@ import {
   Send,
   Users,
   Smartphone,
+  Brain,
   LogOut,
   Menu,
   X,
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/app/broadcasts', label: 'Broadcast', icon: Send },
   { to: '/app/contacts', label: 'Kontak', icon: Users },
   { to: '/app/wa-setup', label: 'WhatsApp', icon: Smartphone },
+  { to: '/app/prompt-training', label: 'Prompt Training', icon: Brain },
 ];
 
 export default function Layout() {

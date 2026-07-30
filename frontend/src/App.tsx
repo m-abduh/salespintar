@@ -7,6 +7,7 @@ import Chat from './pages/Chat';
 import Broadcasts from './pages/Broadcasts';
 import Contacts from './pages/Contacts';
 import WASetup from './pages/WASetup';
+import PromptTraining from './pages/PromptTraining';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="broadcasts" element={<Broadcasts />} />
         <Route path="contacts" element={<Contacts />} />
         <Route path="wa-setup" element={<WASetup />} />
+        <Route path="prompt-training" element={<PromptTraining />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

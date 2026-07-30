@@ -47,7 +47,7 @@ router.get('/status', authenticate, async (req: Request, res: Response, next: Ne
 router.post('/disconnect', authenticate, authorize('ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     await baileysManager.disconnect(req.user!.businessId);
-    res.json({ message: 'WhatsApp disconnected' });
+    res.json({ message: 'WhatsApp disconnected — session tetap ada, reconnect tanpa QR' });
   } catch (err) { next(err); }
 });
 
@@ -56,6 +56,13 @@ router.post('/reconnect', authenticate, authorize('ADMIN'), async (req: Request,
     await baileysManager.disconnect(req.user!.businessId);
     await baileysManager.connect(req.user!.businessId);
     res.json({ message: 'Reconnecting...' });
+  } catch (err) { next(err); }
+});
+
+router.post('/logout', authenticate, authorize('ADMIN'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await baileysManager.logout(req.user!.businessId);
+    res.json({ message: 'WhatsApp logout — semua data session & credential dihapus' });
   } catch (err) { next(err); }
 });
 

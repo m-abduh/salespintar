@@ -28,6 +28,11 @@ export default function WASetup() {
     onSuccess: () => refetch(),
   });
 
+  const { mutate: logout } = useMutation({
+    mutationFn: () => apiPost('/wa/logout'),
+    onSuccess: () => refetch(),
+  });
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">WhatsApp Setup</h1>
@@ -114,7 +119,13 @@ export default function WASetup() {
             onClick={() => disconnect()}
             className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 text-sm"
           >
-            <XCircle className="w-4 h-4" /> Putuskan Koneksi
+            <XCircle className="w-4 h-4" /> Putus Koneksi
+          </button>
+          <button
+            onClick={() => logout()}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+          >
+            <XCircle className="w-4 h-4" /> Logout
           </button>
         </div>
       </div>

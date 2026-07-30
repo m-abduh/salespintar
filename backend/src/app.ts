@@ -8,9 +8,11 @@ import { correlationMiddleware } from './utils/correlation';
 import { errorHandler } from './middleware/errorHandler';
 import { prisma } from './config/prisma';
 import { logger } from './utils/logger';
+import { testApiKey } from './services/ai.service';
 
 import authRoutes from './routes/auth.routes';
 import waRoutes from './routes/wa.routes';
+import businessRoutes from './routes/business.routes';
 import conversationRoutes from './routes/conversation.routes';
 import messageRoutes from './routes/message.routes';
 import leadRoutes from './routes/lead.routes';
@@ -64,11 +66,17 @@ app.get(`${env.API_PREFIX}/health`, async (_req, res) => {
 
 app.use(`${env.API_PREFIX}/auth`, authRoutes);
 app.use(`${env.API_PREFIX}/wa`, waRoutes);
+app.use(`${env.API_PREFIX}/business`, businessRoutes);
 app.use(`${env.API_PREFIX}/conversations`, conversationRoutes);
 app.use(`${env.API_PREFIX}/conversations/:id/messages`, messageRoutes);
 app.use(`${env.API_PREFIX}/leads`, leadRoutes);
 app.use(`${env.API_PREFIX}/broadcasts`, broadcastRoutes);
 app.use(`${env.API_PREFIX}/dashboard`, dashboardRoutes);
+
+app.get(`${env.API_PREFIX}/ai/test`, async (_req, res) => {
+  const result = await testApiKey();
+  res.json(result);
+});
 
 app.use(errorHandler);
 

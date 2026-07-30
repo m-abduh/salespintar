@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost } from '../lib/api';
+import { apiGet, apiPost, apiPatch } from '../lib/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useAuthStore } from '../stores/auth';
 import { Send, ArrowLeft, UserCheck, RotateCcw, CheckCircle } from 'lucide-react';
@@ -13,6 +13,7 @@ export default function Chat() {
   const { user } = useAuthStore();
   const { on } = useWebSocket();
   const [message, setMessage] = useState('');
+  const [systemMsgs, setSystemMsgs] = useState<{ id: string; text: string }[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: conversations } = useQuery({
@@ -36,6 +37,7 @@ export default function Chat() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['messages', selectedId] });
     },
+    onError: (err: Error) => alert('Gagal kirim: ' + err.message),
   });
 
   const takeoverMutation = useMutation({
@@ -57,6 +59,14 @@ export default function Chat() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
       navigate('/app/chat');
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: (status: string) =>
+      apiPatch(`/conversations/${selectedId}/status`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
 
@@ -84,8 +94,27 @@ export default function Chat() {
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     if (!message.trim() || !selectedId) return;
-    sendMutation.mutate(message.trim());
+    const text = message.trim();
     setMessage('');
+
+    if (text.startsWith('/ai')) {
+      const current = selectedConv?.status === 'AI';
+      const parts = text.split(/\s+/);
+      let newStatus: string;
+      if (parts.length === 1) {
+        newStatus = current ? 'HUMAN' : 'AI';
+      } else {
+        newStatus = parts[1] === 'on' ? 'AI' : 'HUMAN';
+      }
+      const label = newStatus === 'AI' ? '🤖 AI mode aktif' : '✋ AI mode nonaktif';
+      const id = Date.now().toString();
+      setSystemMsgs(prev => [...prev, { id, text: label }]);
+      setTimeout(() => setSystemMsgs(prev => prev.filter(m => m.id !== id)), 4000);
+      statusMutation.mutate(newStatus);
+      return;
+    }
+
+    sendMutation.mutate(text);
   };
 
   const isHuman = selectedConv?.status === 'HUMAN';
@@ -196,6 +225,11 @@ export default function Chat() {
                       {m.fromRole === 'HUMAN' && ` - ${m.human?.name || 'Sales'}`}
                     </p>
                   </div>
+                </div>
+              ))}
+              {systemMsgs.map(m => (
+                <div key={m.id} className="flex justify-center">
+                  <span className="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500 animate-pulse">{m.text}</span>
                 </div>
               ))}
               <div ref={messagesEndRef} />

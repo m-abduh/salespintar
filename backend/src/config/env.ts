@@ -19,7 +19,9 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRES: z.string().default('15m'),
   JWT_REFRESH_EXPIRES: z.string().default('7d'),
 
-  GROQ_API_KEY: z.string().min(1),
+  GROQ_API_KEY: z.string()
+    .min(1, 'GROQ_API_KEY wajib diisi — lihat backend/.env')
+    .refine(k => k.startsWith('gsk_'), 'GROQ_API_KEY harus diawali "gsk_" — cek petik di .env jika ada simbol'),
   GROQ_MODEL: z.string().default('llama-3.1-8b-instant'),
   GROQ_FALLBACK_MODEL: z.string().default('mixtral-8x7b-32768'),
   GROQ_MAX_TOKENS: z.coerce.number().default(1024),

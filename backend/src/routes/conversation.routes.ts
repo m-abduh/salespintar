@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { prisma } from '../config/prisma';
 import { NotFoundError, ConflictError } from '../utils/errors';
 import { getIO } from '../websocket/handler';
@@ -63,6 +65,46 @@ router.patch('/:id', authenticate, async (req: Request, res: Response, next: Nex
       where: { id: req.params.id as string },
       data: req.body,
     });
+    res.json(updated);
+  } catch (err) { next(err); }
+});
+
+const statusSchema = z.object({
+  status: z.enum(['AI', 'HUMAN']),
+});
+
+router.patch('/:id/status', authenticate, validate(statusSchema), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: req.params.id as string, businessId: req.user!.businessId },
+    });
+    if (!conversation) throw new NotFoundError('Conversation');
+
+    if (conversation.status === 'DONE') {
+      throw new ConflictError('Conversation is already done');
+    }
+
+    if (req.body.status === 'HUMAN' && conversation.status === 'HUMAN' && conversation.humanId && conversation.humanId !== req.user!.userId) {
+      throw new ConflictError('Conversation already taken over by another sales');
+    }
+
+    const updated = await prisma.conversation.update({
+      where: { id: req.params.id as string },
+      data: {
+        status: req.body.status,
+        humanId: req.body.status === 'HUMAN' ? req.user!.userId : null,
+      },
+    });
+
+    const io = getIO();
+    if (io) {
+      io.to(`business:${req.user!.businessId}`).emit('chat:status', {
+        conversationId: req.params.id as string,
+        status: req.body.status,
+        humanId: req.body.status === 'HUMAN' ? req.user!.userId : null,
+      });
+    }
+
     res.json(updated);
   } catch (err) { next(err); }
 });
